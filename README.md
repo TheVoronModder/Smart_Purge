@@ -9,7 +9,7 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 >
 >relative purge line positioning between edge of bed and part print area.
 
-
+<br>
 
 >[!TIP]
 >BONUS: You can edit variables and edit them on the fly too!
@@ -22,7 +22,7 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 >
 >then copy / paste below in your macros.cfg
 
-
+<br>
 
 >[!IMPORTANT]
 >QUICK THINGS:
