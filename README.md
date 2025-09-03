@@ -22,7 +22,7 @@ then copy / paste below in your macros.cfg
 
 ```
 [gcode_macro SMART_PURGE]
-description: Purge line 50% into the FRONT free space; always start front-left
+#description: Purge line 50% into the FRONT free space; always start front-left
 # --- Tunables (safe defaults) ---
 variable_extrude_before: 80.0      # mm extruded while stationary
 variable_move_extrude: 30.0        # mm extruded per pass while moving
