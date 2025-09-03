@@ -18,23 +18,23 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 > Warns about potential errors or hazards.
 > 
 
-Macro [gocde_macro SMART_PURGE]
+>[!NOTE]
+>Macro [gocde_macro SMART_PURGE]
+>
+>intent:
+>
+>relative purge line positioning between edge of bed and part print area.
 
-intent:
-
-relative purge line positioning between edge of bed and part print area.
-
-
-BONUS: You can edit variables and edit them on the fly too!
-
-How to make this work:
-
-in your PRINT_START macro, before printing simply add:
-
-{SMART_PURGE]
-
-then copy / paste below in your macros.cfg
-
+>[!TIP]
+>BONUS: You can edit variables and edit them on the fly too!
+>
+>How to make this work:
+>
+>in your PRINT_START macro, before printing simply add:
+>
+>{SMART_PURGE]
+>
+>then copy / paste below in your macros.cfg
 
 QUICK THINGS:
 
