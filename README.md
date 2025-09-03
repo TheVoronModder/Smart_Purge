@@ -27,7 +27,7 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 >[!IMPORTANT]
 >QUICK THINGS:
 >
->SMART_PURGE LINE_LENGTH=100 PURGE_F=360
+>```SMART_PURGE LINE_LENGTH=100 PURGE_F=360```
 >
 >What this does for you
 >
