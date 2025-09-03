@@ -1,4 +1,4 @@
-# Smart_Purge
+# Smart_Purge_Check
 Simple Smart Purge for 3d printer ecosystems running Klipper
 
 
