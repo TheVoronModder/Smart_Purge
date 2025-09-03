@@ -2,28 +2,14 @@
 Simple Smart Purge for 3d printer ecosystems running Klipper
 
 
-> [!NOTE]
-> Highlights information that users should take into account, even when skimming.
-
-> [!TIP]
-> Optional information to help a user be more successful.
-
-> [!IMPORTANT]
-> Crucial information necessary for users to succeed.
-
-> [!CAUTION]
-> Advises about risks or negative outcomes of certain actions.
-
-> [!WARNING]
-> Warns about potential errors or hazards.
-> 
-
 >[!NOTE]
 >Macro [gocde_macro SMART_PURGE]
 >
 >intent:
 >
 >relative purge line positioning between edge of bed and part print area.
+
+
 
 >[!TIP]
 >BONUS: You can edit variables and edit them on the fly too!
@@ -36,21 +22,24 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 >
 >then copy / paste below in your macros.cfg
 
-QUICK THINGS:
 
-SMART_PURGE LINE_LENGTH=100 PURGE_F=360
 
-What this does for you
-
-Relative positioning (G91) for the purge strokes, so it’s robust no matter where you start the macro.
-
-Absolute anchor to front-left first, so the lane is positioned correctly vs. your parts.
-
-No changes to extrusion mode — works with either, by issuing cumulative E values when you’re in absolute mode and incremental when you’re in relative mode.
-
-Super slow prime (F360) to avoid back-pressure clogs.
-
-Short line (default 100 mm) and you can tweak with LINE_LENGTH=….
+>[!IMPORTANT]
+>QUICK THINGS:
+>
+>SMART_PURGE LINE_LENGTH=100 PURGE_F=360
+>
+>What this does for you
+>
+>Relative positioning (G91) for the purge strokes, so it’s robust no matter where you start the macro.
+>
+>Absolute anchor to front-left first, so the lane is positioned correctly vs. your parts.
+>
+>No changes to extrusion mode — works with either, by issuing cumulative E values when you’re in absolute mode and incremental when you’re in relative mode.
+>
+>Super slow prime (F360) to avoid back-pressure clogs.
+>
+>Short line (default 100 mm) and you can tweak with LINE_LENGTH=….
 
 ```
 [gcode_macro SMART_PURGE]
