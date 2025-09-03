@@ -2,6 +2,17 @@
 Simple Smart Purge for 3d printer ecosystems running Klipper
 
 
+> [!CAUTION]
+> If
+
+> [!TIP]
+> .stl 
+
+> [!WARNING]  
+>  Please prin
+>
+>  [!NOTE]
+
 Macro [gocde_macro SMART_PURGE]
 
 intent:
