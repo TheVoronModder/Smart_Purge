@@ -43,41 +43,37 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 
 ```
 [gcode_macro SMART_PURGE]
-# description: Front-left purge; geometry-based flow; short slow prime; 100mm line; relative positioning
-# --- Tunables (safe defaults) ---
-variable_margin: 5.0                # mm from bed edges & parts (front/left)
-variable_line_z: 0.25              # purge Z height
-variable_line_length: 100.0        # mm length of moving purge line
-variable_backstep: 0.8             # mm Y offset between lanes
-variable_passes: 2                 # number of lanes (2 is plenty for purge)
-variable_travel_f: 6000            # mm/min travel speed
-variable_line_f: 600               # mm/min drawing speed (10 mm/s)
-# Prime (stationary) — keep gentle to avoid back-pressure
-variable_prime_e: 15.0             # mm filament for the initial prime
-variable_prime_f: 180              # mm/min (3 mm/s) for the prime
-
-# Bead geometry for flow math (adjust to your first-layer settings)
-variable_layer_h: 0.25             # mm
-variable_line_w: 0.60              # mm
-variable_fil_d: 1.75               # mm filament diameter
-variable_flow: 1.00                # scalar (1.0 = 100%)
+# description: Front-left purge; single straight line (≤100mm); geometry-based flow; gentle prime
+# --- Tunables (safe) ---
+variable_margin: 5.0                # mm from bed edges
+variable_line_z: 0.25               # purge Z height
+variable_line_length: 100.0         # requested line length (hard-capped to 100mm)
+variable_travel_f: 6000             # mm/min travel
+variable_line_f: 600                # mm/min drawing speed (10 mm/s)
+# Prime (stationary)
+variable_prime_e: 10.0              # mm filament for initial prime
+variable_prime_f: 120               # mm/min (2 mm/s) very gentle
+# Bead geometry for E-per-mm
+variable_layer_h: 0.25              # mm
+variable_line_w: 0.60               # mm
+variable_fil_d: 1.75                # mm filament diameter
+variable_flow: 1.00                 # scalar (1.0 = 100%)
 
 gcode:
-  # ---- Bed coords: (0,0)=front-left; user Y max defaults to 300 (rear endstop) ----
+  # Bed coords: (0,0)=front-left ; Y max defaults to 300 if not provided
   {% set BED_MAX_X = (params.BED_MAX_X|default(printer.toolhead.axis_maximum.x)|float) %}
   {% set BED_MAX_Y = (params.BED_MAX_Y|default(300)|float) %}
   {% set margin = margin|float %}
-  {% set line_len_req = line_length|float %}
-  {% set backstep = backstep|float %}
-  {% set passes = passes|int %}
+  {% set req_len = (line_length|float) %}
+  {% if req_len > 100.0 %}{% set req_len = 100.0 %}{% endif %}  # hard cap 100mm
 
-  # Home if needed (prevents "move out of range")
+  # Home if needed to avoid out-of-range
   {% set homed = printer.toolhead.homed_axes %}
   {% if 'x' not in homed or 'y' not in homed or 'z' not in homed %}
     G28
   {% endif %}
 
-  # ---- Front gap placement from EXCLUDE_OBJECT (keeps purge ahead of parts) ----
+  # Find front-most Y of objects (keep purge in front gap)
   {% set have_objs = printer.exclude_object is defined and printer.exclude_object.objects|length > 0 %}
   {% if have_objs %}
     {% set obj_min_y = None %}
@@ -102,20 +98,13 @@ gcode:
   {% endif %}
   {% set target_y = front_low + (front_high - front_low) * 0.5 %}
 
-  # ---- X span: start at front-left; cap line length inside bed ----
+  # X span: start at front-left; clamp length to available width and 100mm cap
   {% set start_x_abs = 0.0 + margin %}
   {% set avail_w = BED_MAX_X - (2*margin) %}
   {% if avail_w < 0 %}{% set avail_w = 0 %}{% endif %}
-  {% set line_len = line_len_req if line_len_req <= avail_w else avail_w %}
+  {% set line_len = req_len if req_len <= avail_w else avail_w %}
 
-  # ---- Limit lanes so Y steps never cross into the part envelope ----
-  {% set max_delta = front_high - target_y %}
-  {% if backstep <= 0 %}{% set backstep = 0.8 %}{% endif %}
-  {% set max_lanes = 1 + (max_delta // backstep)|int %}
-  {% if passes > max_lanes %}{% set passes = max_lanes %}{% endif %}
-  {% if passes < 1 %}{% set passes = 1 %}{% endif %}
-
-  # ---- Geometry-based flow: E per mm of XY travel ----
+  # Geometry-based flow (E per mm)
   {% set lw = line_w|float %}
   {% set lh = layer_h|float %}
   {% set fd = fil_d|float %}
@@ -125,17 +114,17 @@ gcode:
   {% set e_per_mm = (lw * lh * flow) / fil_area %}
   {% set e_move = e_per_mm * line_len %}
 
-  # ---- Respect current modes; we'll only switch positioning, not extrusion mode ----
+  # Respect current modes (only switch positioning, not extrusion mode)
   {% set was_abs_coord = printer.gcode_move.absolute_coordinates %}
   {% set is_abs_extrude = printer.gcode_move.absolute_extrude %}
 
-  # ---- Anchor in ABSOLUTE, then draw in RELATIVE positioning ----
+  # Anchor at start in ABSOLUTE, then draw one forward line in RELATIVE
   G90
   G92 E0
   G1 Z{line_z} F{travel_f}
   G1 X{start_x_abs} Y{target_y} F{travel_f}
 
-  ; Slow, gentle stationary prime
+  ; Very gentle stationary prime
   {% if is_abs_extrude %}
     G1 E{prime_e} F{prime_f}
     {% set e_total = prime_e|float %}
@@ -144,33 +133,13 @@ gcode:
   {% endif %}
 
   G91
-
-  {% for i in range(passes) %}
-    {% if (i % 2) == 0 %}
-      ; forward line
-      {% if is_abs_extrude %}
-        {% set e_total = e_total + e_move %}
-        G1 X{line_len} E{e_total} F{line_f}
-      {% else %}
-        G1 X{line_len} E{e_move} F{line_f}
-      {% endif %}
-    {% else %}
-      ; back line
-      {% if is_abs_extrude %}
-        {% set e_total = e_total + e_move %}
-        G1 X{-line_len} E{e_total} F{line_f}
-      {% else %}
-        G1 X{-line_len} E{e_move} F{line_f}
-      {% endif %}
-    {% endif %}
-
-    {% if i < (passes - 1) %}
-      {% set desired = backstep %}
-      {% set remaining = max_delta - (backstep * (i + 1)) %}
-      {% if remaining < 0 %}{% set desired = backstep + remaining %}{% endif %}
-      G1 Y{desired} F{travel_f}
-    {% endif %}
-  {% endfor %}
+  ; Single straight forward pass (no reversals, no Y moves)
+  {% if is_abs_extrude %}
+    {% set e_total = e_total + e_move %}
+    G1 X{line_len} E{e_total} F{line_f}
+  {% else %}
+    G1 X{line_len} E{e_move} F{line_f}
+  {% endif %}
 
   G92 E0
   {% if was_abs_coord %} G90 {% else %} G91 {% endif %}
