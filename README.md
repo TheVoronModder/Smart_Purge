@@ -1,17 +1,20 @@
 # Smart_Purge
 Simple Smart Purge for 3d printer ecosystems running Klipper
 
-
-> [!CAUTION]
-> If
+> [!NOTE]
+> Highlights information that users should take into account, even when skimming.
 
 > [!TIP]
-> .stl 
+> Optional information to help a user be more successful.
 
-> [!WARNING]  
->  Please prin
->
->  [!IMPORTANT]
+> [!IMPORTANT]
+> Crucial information necessary for users to succeed.
+
+> [!CAUTION]
+> Advises about risks or negative outcomes of certain actions.
+
+> [!WARNING]
+> Warns about potential errors or hazards.
 
 Macro [gocde_macro SMART_PURGE]
 
