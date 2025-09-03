@@ -1,8 +1,6 @@
 # Smart_Purge
 Simple Smart Purge for 3d printer ecosystems running Klipper
 
-> [!TYPE]
-> Message text goes here.
 
 > [!NOTE]
 > Highlights information that users should take into account, even when skimming.
