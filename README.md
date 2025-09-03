@@ -22,83 +22,62 @@ then copy / paste below in your macros.cfg
 
 ```
 [gcode_macro SMART_PURGE]
-description: Purge line placed ~50% away from parts; slow & heavy purge
-# Tunables
-variable_extrude_before: 80.0
-variable_move_extrude: 30.0
-variable_passes: 3
-variable_travel_f: 6000
-variable_purge_f: 1200
-variable_margin: 5.0
-variable_backstep: 0.8
-variable_line_z: 0.25
+description: Purge line 50% into the FRONT free space; always start front-left
+# --- Tunables (safe defaults) ---
+variable_extrude_before: 80.0      # mm extruded while stationary
+variable_move_extrude: 30.0        # mm extruded per pass while moving
+variable_passes: 3                 # number of purge passes
+variable_travel_f: 6000            # mm/min travel speed
+variable_purge_f: 1200             # mm/min purge speed (slower = thicker)
+variable_margin: 5.0               # keep this far from edges & parts
+variable_backstep: 0.8             # Y offset between passes (mm)
+variable_line_z: 0.25              # purge height
 
 gcode:
-  {% set tool = printer.toolhead %}
-  {% set xmin = tool.axis_minimum.x|float %}
-  {% set xmax = tool.axis_maximum.x|float %}
-  {% set ymin = tool.axis_minimum.y|float %}
-  {% set ymax = tool.axis_maximum.y|float %}
+  # ---- Bed coordinate space: (0,0) = FRONT-LEFT, (BED_MAX_X, BED_MAX_Y) = BACK-RIGHT ----
+  # User stated Y max = 300 (rear endstop). X max auto from firmware unless overridden.
+  {% set BED_MAX_X = (params.BED_MAX_X|default(printer.toolhead.axis_maximum.x)|float) %}
+  {% set BED_MAX_Y = (params.BED_MAX_Y|default(300)|float) %}
+  {% set margin = margin|float %}
 
+  # ---- Get overall part bbox from EXCLUDE_OBJECT (bed coords) ----
   {% set have_objs = printer.exclude_object is defined and printer.exclude_object.objects|length > 0 %}
   {% if have_objs %}
-    {% set obj_min_x = None %}
-    {% set obj_max_x = None %}
     {% set obj_min_y = None %}
-    {% set obj_max_y = None %}
-
     {% for o in printer.exclude_object.objects %}
       {% if o.polygon is defined and o.polygon|length > 0 %}
         {% for pt in o.polygon %}
-          {% set x = pt[0]|float %}
           {% set y = pt[1]|float %}
-          {% set obj_min_x = x if obj_min_x is none or x < obj_min_x else obj_min_x %}
-          {% set obj_max_x = x if obj_max_x is none or x > obj_max_x else obj_max_x %}
-          {% set obj_min_y = y if obj_min_y is none or y < obj_min_y else obj_min_y %}
-          {% set obj_max_y = y if obj_max_y is none or y > obj_max_y else obj_max_y %}
+          {% if obj_min_y is none or y < obj_min_y %}{% set obj_min_y = y %}{% endif %}
         {% endfor %}
       {% endif %}
     {% endfor %}
-
-    {% if obj_min_y is not none and obj_max_y is not none %}
-      {% set free_front = (obj_min_y - ymin)|float %}
-      {% set free_back  = (ymax - obj_max_y)|float %}
-
-      {% if free_front >= free_back %}
-        {% set target_y = ymin + free_front * 0.5 %}
-        {% set low_y = ymin + margin %}
-        {% set high_y = obj_min_y - margin %}
-      {% else %}
-        {% set target_y = ymax - free_back * 0.5 %}
-        {% set low_y = obj_max_y + margin %}
-        {% set high_y = ymax - margin %}
-      {% endif %}
-
-      {% if target_y < low_y %}{% set target_y = low_y %}{% endif %}
-      {% if target_y > high_y %}{% set target_y = high_y %}{% endif %}
-
-      {% set start_x = xmin + margin %}
-      {% set end_x   = xmax - margin %}
-    {% else %}
-      {% set target_y = ymin + 60.0 %}
-      {% set start_x  = xmin + 50.0 %}
-      {% set end_x    = start_x + 150.0 %}
-    {% endif %}
-  {% else %}
-    {% set target_y = ymin + 60.0 %}
-    {% set start_x  = xmin + 50.0 %}
-    {% set end_x    = start_x + 150.0 %}
   {% endif %}
 
-  # Purge sequence
+  # ---- FRONT gap only: [front_low, front_high] = [margin, obj_min_y - margin] ----
+  {% if have_objs and obj_min_y is not none %}
+    {% set front_low  = 0.0 + margin %}
+    {% set front_high = obj_min_y - margin %}
+    {% if front_high < front_low %}{% set front_high = front_low %}{% endif %}
+    {% set target_y = front_low + (front_high - front_low) * 0.5 %}
+  {% else %}
+    # Fallback (no object data): front band from margin to margin+60 (clamped)
+    {% set front_low  = 0.0 + margin %}
+    {% set front_high = front_low + 60.0 %}
+    {% if front_high > (BED_MAX_Y - margin) %}{% set front_high = BED_MAX_Y - margin %}{% endif %}
+    {% set target_y = front_low + (front_high - front_low) * 0.5 %}
+  {% endif %}
+
+  # ---- Always start FRONT-LEFT; purge runs across width with margins ----
+  {% set start_x = 0.0 + margin %}
+  {% set end_x   = BED_MAX_X - margin %}
+
+  # ---- Purge sequence (simple, Klipper-friendly) ----
   G92 E0
   G1 Z{line_z} F{travel_f}
   G1 X{start_x} Y{target_y} F{travel_f}
-
-  # Stationary prime
   G1 E{extrude_before} F{purge_f}
 
-  # Multi-pass zig-zag
   {% for i in range(passes|int) %}
     {% if (i % 2) == 0 %}
       G1 X{end_x} E{move_extrude} F{purge_f}
@@ -106,7 +85,9 @@ gcode:
       G1 X{start_x} E{move_extrude} F{purge_f}
     {% endif %}
     {% if i < (passes|int - 1) %}
-      G1 Y{target_y + backstep * (i + 1)} F{travel_f}
+      {% set next_y = target_y + backstep * (i + 1) %}
+      {% if next_y > front_high %}{% set next_y = front_high %}{% endif %}
+      G1 Y{next_y} F{travel_f}
     {% endif %}
   {% endfor %}
 
