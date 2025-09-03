@@ -43,37 +43,40 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 
 ```
 [gcode_macro SMART_PURGE]
-# description: Front-left purge; single straight line (≤100mm); geometry-based flow; gentle prime
-# --- Tunables (safe) ---
+# description: Front-left purge; keep ~FRONT_GAP from parts (or midpoint if tight); single straight line ≤100mm
+# --- Tunables (safe defaults) ---
 variable_margin: 5.0                # mm from bed edges
+variable_front_gap: 30.0            # desired distance from front of part bbox to purge (mm)
 variable_line_z: 0.25               # purge Z height
-variable_line_length: 100.0         # requested line length (hard-capped to 100mm)
+variable_line_length: 100.0         # requested line length (hard-capped to 100 mm)
 variable_travel_f: 6000             # mm/min travel
 variable_line_f: 600                # mm/min drawing speed (10 mm/s)
-# Prime (stationary)
-variable_prime_e: 10.0              # mm filament for initial prime
-variable_prime_f: 120               # mm/min (2 mm/s) very gentle
+# Gentle stationary prime
+variable_prime_e: 10.0              # mm filament for prime
+variable_prime_f: 120               # mm/min (2 mm/s)
 # Bead geometry for E-per-mm
 variable_layer_h: 0.25              # mm
 variable_line_w: 0.60               # mm
-variable_fil_d: 1.75                # mm filament diameter
-variable_flow: 1.00                 # scalar (1.0 = 100%)
+variable_fil_d: 1.75                # mm
+variable_flow: 1.00                 # scalar
 
 gcode:
-  # Bed coords: (0,0)=front-left ; Y max defaults to 300 if not provided
+  # --- Bed coords: (0,0)=front-left ; Y max default 300 unless overridden ---
   {% set BED_MAX_X = (params.BED_MAX_X|default(printer.toolhead.axis_maximum.x)|float) %}
   {% set BED_MAX_Y = (params.BED_MAX_Y|default(300)|float) %}
+
   {% set margin = margin|float %}
   {% set req_len = (line_length|float) %}
   {% if req_len > 100.0 %}{% set req_len = 100.0 %}{% endif %}  # hard cap 100mm
+  {% set desired_gap = params.FRONT_GAP|default(front_gap)|float %}
 
-  # Home if needed to avoid out-of-range
+  # Home if needed (prevents out-of-range)
   {% set homed = printer.toolhead.homed_axes %}
   {% if 'x' not in homed or 'y' not in homed or 'z' not in homed %}
     G28
   {% endif %}
 
-  # Find front-most Y of objects (keep purge in front gap)
+  # --- Find front-most Y of all objects (EXCLUDE_OBJECT) ---
   {% set have_objs = printer.exclude_object is defined and printer.exclude_object.objects|length > 0 %}
   {% if have_objs %}
     {% set obj_min_y = None %}
@@ -87,24 +90,29 @@ gcode:
     {% endfor %}
   {% endif %}
 
+  # --- Choose purge Y: target ~30mm in front, else midpoint of available front gap ---
+  {% set front_low  = 0.0 + margin %}
   {% if have_objs and obj_min_y is not none %}
-    {% set front_low  = 0.0 + margin %}
     {% set front_high = obj_min_y - margin %}
     {% if front_high < front_low %}{% set front_high = front_low %}{% endif %}
+    {% set gap = front_high - front_low %}
+    {% if gap >= desired_gap %}
+      {% set target_y = obj_min_y - desired_gap %}
+    {% else %}
+      {% set target_y = front_low + gap * 0.5 %}
+    {% endif %}
   {% else %}
-    {% set front_low  = 0.0 + margin %}
-    {% set front_high = front_low + 60.0 %}
-    {% if front_high > (BED_MAX_Y - margin) %}{% set front_high = BED_MAX_Y - margin %}{% endif %}
+    {% set target_y = front_low + desired_gap %}
+    {% if target_y > (BED_MAX_Y - margin) %}{% set target_y = BED_MAX_Y - margin %}{% endif %}
   {% endif %}
-  {% set target_y = front_low + (front_high - front_low) * 0.5 %}
 
-  # X span: start at front-left; clamp length to available width and 100mm cap
+  # --- X span: start at front-left; clamp length to bed width and 100mm cap ---
   {% set start_x_abs = 0.0 + margin %}
   {% set avail_w = BED_MAX_X - (2*margin) %}
   {% if avail_w < 0 %}{% set avail_w = 0 %}{% endif %}
   {% set line_len = req_len if req_len <= avail_w else avail_w %}
 
-  # Geometry-based flow (E per mm)
+  # --- Geometry-based flow (E per mm of XY travel) ---
   {% set lw = line_w|float %}
   {% set lh = layer_h|float %}
   {% set fd = fil_d|float %}
@@ -114,17 +122,17 @@ gcode:
   {% set e_per_mm = (lw * lh * flow) / fil_area %}
   {% set e_move = e_per_mm * line_len %}
 
-  # Respect current modes (only switch positioning, not extrusion mode)
+  # Respect current modes (we only switch positioning, not extrusion)
   {% set was_abs_coord = printer.gcode_move.absolute_coordinates %}
   {% set is_abs_extrude = printer.gcode_move.absolute_extrude %}
 
-  # Anchor at start in ABSOLUTE, then draw one forward line in RELATIVE
+  # --- Anchor & draw (absolute to spot, relative for stroke) ---
   G90
   G92 E0
   G1 Z{line_z} F{travel_f}
   G1 X{start_x_abs} Y{target_y} F{travel_f}
 
-  ; Very gentle stationary prime
+  ; Gentle stationary prime
   {% if is_abs_extrude %}
     G1 E{prime_e} F{prime_f}
     {% set e_total = prime_e|float %}
@@ -133,7 +141,6 @@ gcode:
   {% endif %}
 
   G91
-  ; Single straight forward pass (no reversals, no Y moves)
   {% if is_abs_extrude %}
     {% set e_total = e_total + e_move %}
     G1 X{line_len} E{e_total} F{line_f}
@@ -143,5 +150,11 @@ gcode:
 
   G92 E0
   {% if was_abs_coord %} G90 {% else %} G91 {% endif %}
-
 ```
+
+>[!NOTE]
+>How it works:
+><br>
+> If there’s ≥ 30 mm between the part’s front edge and the bed front (after margin), it puts the purge exactly 30 mm in front of the part.
+>
+>If there’s < 30 mm available, it uses the midpoint of the remaining gap so you still stay in front without crowding.
