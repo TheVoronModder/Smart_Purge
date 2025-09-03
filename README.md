@@ -43,28 +43,41 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 
 ```
 [gcode_macro SMART_PURGE]
-# description: Front-left purge; front-gap midpoint; 50mm slow prime + 100mm line; relative positioning
-# --- Tunables ---
-variable_extrude_before: 50.0      # mm stationary prime (slow)
-variable_move_extrude: 30.0        # mm per moving pass
-variable_passes: 3                 # number of purge passes (zig-zag lanes)
-variable_travel_f: 6000            # mm/min travel
-variable_purge_f: 1200             # mm/min moving purge speed
-variable_margin: 5.0               # mm from edges/parts
+# description: Front-left purge; geometry-based flow; short slow prime; 100mm line; relative positioning
+# --- Tunables (safe defaults) ---
+variable_margin: 5.0                # mm from bed edges & parts (front/left)
+variable_line_z: 0.25              # purge Z height
+variable_line_length: 100.0        # mm length of moving purge line
 variable_backstep: 0.8             # mm Y offset between lanes
-variable_line_z: 0.25              # Z height for purge
-variable_line_length: 100.0        # mm line length (moving part)
+variable_passes: 2                 # number of lanes (2 is plenty for purge)
+variable_travel_f: 6000            # mm/min travel speed
+variable_line_f: 600               # mm/min drawing speed (10 mm/s)
+# Prime (stationary) — keep gentle to avoid back-pressure
+variable_prime_e: 15.0             # mm filament for the initial prime
+variable_prime_f: 180              # mm/min (3 mm/s) for the prime
+
+# Bead geometry for flow math (adjust to your first-layer settings)
+variable_layer_h: 0.25             # mm
+variable_line_w: 0.60              # mm
+variable_fil_d: 1.75               # mm filament diameter
+variable_flow: 1.00                # scalar (1.0 = 100%)
 
 gcode:
-  # Bed coords: (0,0)=front-left ; user Y max = 300 (rear endstop)
+  # ---- Bed coords: (0,0)=front-left; user Y max defaults to 300 (rear endstop) ----
   {% set BED_MAX_X = (params.BED_MAX_X|default(printer.toolhead.axis_maximum.x)|float) %}
   {% set BED_MAX_Y = (params.BED_MAX_Y|default(300)|float) %}
   {% set margin = margin|float %}
-  {% set line_len = line_length|float %}
+  {% set line_len_req = line_length|float %}
   {% set backstep = backstep|float %}
   {% set passes = passes|int %}
 
-  # Figure front-most part Y from EXCLUDE_OBJECT polygons (if present)
+  # Home if needed (prevents "move out of range")
+  {% set homed = printer.toolhead.homed_axes %}
+  {% if 'x' not in homed or 'y' not in homed or 'z' not in homed %}
+    G28
+  {% endif %}
+
+  # ---- Front gap placement from EXCLUDE_OBJECT (keeps purge ahead of parts) ----
   {% set have_objs = printer.exclude_object is defined and printer.exclude_object.objects|length > 0 %}
   {% if have_objs %}
     {% set obj_min_y = None %}
@@ -78,7 +91,6 @@ gcode:
     {% endfor %}
   {% endif %}
 
-  # Compute front gap and target_y (midpoint of gap)
   {% if have_objs and obj_min_y is not none %}
     {% set front_low  = 0.0 + margin %}
     {% set front_high = obj_min_y - margin %}
@@ -90,62 +102,69 @@ gcode:
   {% endif %}
   {% set target_y = front_low + (front_high - front_low) * 0.5 %}
 
-  # X span: start at front-left margin, line length capped to available width
+  # ---- X span: start at front-left; cap line length inside bed ----
   {% set start_x_abs = 0.0 + margin %}
   {% set avail_w = BED_MAX_X - (2*margin) %}
-  {% if line_len > avail_w %}{% set line_len = avail_w %}{% endif %}
+  {% if avail_w < 0 %}{% set avail_w = 0 %}{% endif %}
+  {% set line_len = line_len_req if line_len_req <= avail_w else avail_w %}
 
-  # Limit lane count so Y steps don't cross into parts
+  # ---- Limit lanes so Y steps never cross into the part envelope ----
   {% set max_delta = front_high - target_y %}
   {% if backstep <= 0 %}{% set backstep = 0.8 %}{% endif %}
   {% set max_lanes = 1 + (max_delta // backstep)|int %}
   {% if passes > max_lanes %}{% set passes = max_lanes %}{% endif %}
   {% if passes < 1 %}{% set passes = 1 %}{% endif %}
 
-  # Detect current modes so we can restore later and handle E correctly
+  # ---- Geometry-based flow: E per mm of XY travel ----
+  {% set lw = line_w|float %}
+  {% set lh = layer_h|float %}
+  {% set fd = fil_d|float %}
+  {% set flow = flow|float %}
+  {% set fil_area = 3.1415926535 * (fd/2.0) * (fd/2.0) %}
+  {% if fil_area <= 0 %}{% set fil_area = 2.405 %}{% endif %}
+  {% set e_per_mm = (lw * lh * flow) / fil_area %}
+  {% set e_move = e_per_mm * line_len %}
+
+  # ---- Respect current modes; we'll only switch positioning, not extrusion mode ----
   {% set was_abs_coord = printer.gcode_move.absolute_coordinates %}
   {% set is_abs_extrude = printer.gcode_move.absolute_extrude %}
 
-  # --- Move to anchor in ABSOLUTE coords ---
+  # ---- Anchor in ABSOLUTE, then draw in RELATIVE positioning ----
   G90
   G92 E0
   G1 Z{line_z} F{travel_f}
   G1 X{start_x_abs} Y{target_y} F{travel_f}
 
-  # --- Stationary prime (slow = 6 mm/s -> F360) ---
+  ; Slow, gentle stationary prime
   {% if is_abs_extrude %}
-    ; absolute E: grow the target
-    G1 E{extrude_before} F360
-    {% set e_total = extrude_before|float %}
+    G1 E{prime_e} F{prime_f}
+    {% set e_total = prime_e|float %}
   {% else %}
-    ; relative E
-    G1 E{extrude_before} F360
+    G1 E{prime_e} F{prime_f}
   {% endif %}
 
-  # --- Purge passes in RELATIVE POSITIONING (G91) ---
   G91
 
   {% for i in range(passes) %}
     {% if (i % 2) == 0 %}
-      ; forward X line
+      ; forward line
       {% if is_abs_extrude %}
-        {% set e_total = e_total + (move_extrude|float) %}
-        G1 X{line_len} E{e_total} F{purge_f}
+        {% set e_total = e_total + e_move %}
+        G1 X{line_len} E{e_total} F{line_f}
       {% else %}
-        G1 X{line_len} E{move_extrude} F{purge_f}
+        G1 X{line_len} E{e_move} F{line_f}
       {% endif %}
     {% else %}
-      ; back X line
+      ; back line
       {% if is_abs_extrude %}
-        {% set e_total = e_total + (move_extrude|float) %}
-        G1 X{-line_len} E{e_total} F{purge_f}
+        {% set e_total = e_total + e_move %}
+        G1 X{-line_len} E{e_total} F{line_f}
       {% else %}
-        G1 X{-line_len} E{move_extrude} F{purge_f}
+        G1 X{-line_len} E{e_move} F{line_f}
       {% endif %}
     {% endif %}
 
     {% if i < (passes - 1) %}
-      ; step back in Y, but clamp final step if needed
       {% set desired = backstep %}
       {% set remaining = max_delta - (backstep * (i + 1)) %}
       {% if remaining < 0 %}{% set desired = backstep + remaining %}{% endif %}
@@ -153,13 +172,7 @@ gcode:
     {% endif %}
   {% endfor %}
 
-  ; tidy up
   G92 E0
+  {% if was_abs_coord %} G90 {% else %} G91 {% endif %}
 
-  ; restore coord mode
-  {% if was_abs_coord %}
-    G90
-  {% else %}
-    G91
-  {% endif %}
 ```
