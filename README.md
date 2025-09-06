@@ -50,7 +50,7 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 
 ```
 [gcode_macro SMART_PURGE]
-# description: Front-left purge; STYLE=CHECK or DOT; draws check ✓ or blob, shifts +10mm, then purge line (≤100mm)
+# description: Front-left purge; STYLE=CHECK|DOT; object-aware front gap; bed-size margins; ≤100 mm line
 # --- Tunables ---
 variable_front_gap: 30.0
 variable_line_z: 0.25
@@ -69,7 +69,7 @@ variable_margin_300: 5.0
 variable_margin_350: 5.0
 
 gcode:
-  # --- Bed limits from config ---
+  ##### --- Gather bed limits & size bucket ---
   {% set BED_MIN_X = printer.toolhead.axis_minimum.x|float %}
   {% set BED_MAX_X = printer.toolhead.axis_maximum.x|float %}
   {% set BED_MIN_Y = printer.toolhead.axis_minimum.y|float %}
@@ -77,31 +77,31 @@ gcode:
   {% set BED_X = BED_MAX_X - BED_MIN_X %}
   {% set BED_Y = BED_MAX_Y - BED_MIN_Y %}
 
-  # --- Pick size bucket & margin (avoid lambda/key) ---
   {% if BED_X < 275 %}
-    {% set size = 250.0 %}
     {% set default_margin = margin_250|float %}
   {% elif BED_X < 325 %}
-    {% set size = 300.0 %}
     {% set default_margin = margin_300|float %}
   {% else %}
-    {% set size = 350.0 %}
     {% set default_margin = margin_350|float %}
   {% endif %}
   {% set margin = (params.MARGIN|float) if params.MARGIN is defined else default_margin %}
 
-  {% set req_len = (line_length|float) %}
+  ##### --- Inputs / caps ---
+  {% set req_len = (params.LINE_LEN|default(line_length))|float %}
   {% if req_len > 100.0 %}{% set req_len = 100.0 %}{% endif %}
+  {% if req_len < 0.1 %}{% set req_len = 0.1 %}{% endif %}
   {% set desired_gap = params.FRONT_GAP|default(front_gap)|float %}
   {% set style = params.STYLE|default("CHECK")|upper %}
 
-  # Home if needed
-  {% set homed = printer.toolhead.homed_axes %}
+  ##### --- Home if needed ---
+  {% set homed = printer.toolhead.homed_axes|string %}
   {% if 'x' not in homed or 'y' not in homed or 'z' not in homed %}
     G28
   {% endif %}
 
-  # --- Object-aware Y ---
+  SAVE_GCODE_STATE NAME=SMART_PURGE_STATE
+
+  ##### --- Compute object-aware Y target ---
   {% set have_objs = printer.exclude_object is defined and printer.exclude_object.objects|length > 0 %}
   {% if have_objs %}
     {% set obj_min_y = None %}
@@ -130,90 +130,86 @@ gcode:
     {% if target_y > (BED_MAX_Y - margin) %}{% set target_y = BED_MAX_Y - margin %}{% endif %}
   {% endif %}
 
-  # --- Start X ---
+  ##### --- Start X (front-left) & available width ---
   {% set start_x_abs = BED_MIN_X + margin %}
-  {% set avail_w = (BED_MAX_X - margin) - (BED_MIN_X + margin) %}
+  {% set max_right = BED_MAX_X - margin %}
+  {% set avail_w = max_right - start_x_abs %}
   {% if avail_w < 0 %}{% set avail_w = 0 %}{% endif %}
 
-  # --- Flow calc ---
-  {% set lw = line_w|float %}
-  {% set lh = layer_h|float %}
-  {% set fd = fil_d|float %}
-  {% set flow = flow|float %}
+  ##### --- Flow geometry & safe-capped E/mm (prevents max_extrude_cross_section trips) ---
+  {% set lw = (params.LINE_W|default(line_w))|float %}
+  {% set lh = (params.LAYER_H|default(layer_h))|float %}
+  {% set fd = (params.FIL_D|default(fil_d))|float %}
+  {% set flow = (params.FLOW|default(flow))|float %}
   {% set fil_area = 3.1415926535 * (fd/2.0) * (fd/2.0) %}
-  {% if fil_area <= 0 %}{% set fil_area = 2.405 %}{% endif %}
-  {% set e_per_mm = (lw * lh * flow) / fil_area %}
-
-  {% set was_abs_coord = printer.gcode_move.absolute_coordinates %}
-  {% set is_abs_extrude = printer.gcode_move.absolute_extrude %}
-
-  # --- Anchor ---
-  G90
-  G92 E0
-  G1 Z{line_z} F{travel_f}
-  G1 X{start_x_abs} Y{target_y} F{travel_f}
-
-  ; Gentle stationary prime
-  {% if is_abs_extrude %}
-    G1 E{prime_e} F{prime_f}
-    {% set e_total = prime_e|float %}
+  {% if fil_area <= 0 %}{% set fil_area = 2.405 %}{% endif %}  ; sane fallback for 1.75
+  {% set geom_xsec = lw * lh * flow %}
+  {% set max_xsec = (printer.configfile.settings.extruder.max_extrude_cross_section|float) if printer.configfile.settings.extruder is defined and printer.configfile.settings.extruder.max_extrude_cross_section is defined else 0.0 %}
+  {% if max_xsec > 0 and geom_xsec > max_xsec %}
+    {% set scale = max_xsec / geom_xsec %}
   {% else %}
-    G1 E{prime_e} F{prime_f}
+    {% set scale = 1.0 %}
+  {% endif %}
+  {% set e_per_mm = (geom_xsec * scale) / fil_area %}
+  {% if scale < 0.999 %}
+    RESPOND MSG="SMART_PURGE: scaling E by {{'%0.2f' % scale}} to respect max_extrude_cross_section={{'%0.3f' % max_xsec}} mm^2."
   {% endif %}
 
-  # --- Style switch ---
-  {% if style == "DOT" %}
-    ; just leave a blob (already primed)
-    G4 P500
-    {% set dx_check = 0.0 %}
-    {% set dy_check = 0.0 %}
-  {% else %}
-    ; draw check mark
-    {% set dx1 = 3.0 %}{% set dy1 = 1.0 %}
-    {% set dx2 = 6.0 %}{% set dy2 = 4.0 %}
+  ##### --- Z approach (don’t crash if already higher) ---
+  {% set curz = printer.gcode_move.gcode_position.z|float %}
+  {% set target_z = (params.LINE_Z|default(line_z))|float %}
+  {% if target_z < 0.0 %}{% set target_z = 0.0 %}{% endif %}
+  {% set z_go = target_z if curz < target_z else curz %}
+
+  ##### --- Prime anchor ---
+  G90
+  G1 Z{z_go} F{travel_f}
+  G1 X{start_x_abs} Y{target_y} F{travel_f}
+  G92 E0
+  G1 E{prime_e} F{prime_f}
+
+  ##### --- Optional check mark (clamped to bed) ---
+  {% if style != "DOT" %}
+    ; nominal check vectors
+    {% set dx1n, dy1n = 3.0, 1.0 %}
+    {% set dx2n, dy2n = 6.0, 4.0 %}
+    {% set dx_sum = dx1n + dx2n %}
+    {% set edge_room = max_right - start_x_abs %}
+    {% set check_scale = 1.0 if edge_room >= (dx_sum + 0.5) else ( (edge_room - 0.5) / dx_sum if (edge_room - 0.5) > 0 else 0.0 ) %}
+    ; scaled (never beyond margin)
+    {% set dx1, dy1 = dx1n*check_scale, dy1n*check_scale %}
+    {% set dx2, dy2 = dx2n*check_scale, dy2n*check_scale %}
     {% set len1 = (dx1*dx1 + dy1*dy1) ** 0.5 %}
     {% set len2 = (dx2*dx2 + dy2*dy2) ** 0.5 %}
     {% set e1 = e_per_mm * len1 %}
     {% set e2 = e_per_mm * len2 %}
+
     G91
-    {% if is_abs_extrude %}
-      {% set e_total = e_total + e1 %}
-      G1 X{dx1} Y{dy1} E{e_total} F{line_f}
-      {% set e_total = e_total + e2 %}
-      G1 X{dx2} Y{dy2} E{e_total} F{line_f}
-    {% else %}
-      G1 X{dx1} Y{dy1} E{e1} F{line_f}
-      G1 X{dx2} Y{dy2} E{e2} F{line_f}
-    {% endif %}
+    G1 X{dx1} Y{dy1} E{e1} F{line_f}
+    G1 X{dx2} Y{dy2} E{e2} F{line_f}
+    ; drop back down vertically to baseline (travel)
     G1 Y{- (dy1 + dy2)} F{travel_f}
-    {% set dx_check = dx1 + dx2 %}
-    {% set dy_check = 0.0 %}
+    G90
   {% endif %}
 
-  # --- Purge line start ---
+  ##### --- Purge line (auto-clamped length) ---
+  {% set dx_check = (dx1 + dx2) if style != "DOT" else 0.0 %}
   {% set line_start_x = start_x_abs + dx_check + 10.0 %}
-  {% set max_right = BED_MAX_X - margin %}
-  {% if line_start_x < (BED_MIN_X + margin) %}{% set line_start_x = BED_MIN_X + margin %}{% endif %}
   {% if line_start_x > max_right %}{% set line_start_x = max_right %}{% endif %}
-
-  {% set cap_len = req_len %}
+  {% if line_start_x < (BED_MIN_X + margin) %}{% set line_start_x = BED_MIN_X + margin %}{% endif %}
   {% set room = max_right - line_start_x %}
-  {% if room < 0 %}{% set room = 0 %}{% endif %}
-  {% set line_len = cap_len if cap_len <= room else room %}
+  {% if room < 0.1 %}{% set room = 0.1 %}{% endif %}
+  {% set line_len = req_len if req_len <= room else room %}
   {% set e_move = e_per_mm * line_len %}
 
   G90
   G1 X{line_start_x} Y{target_y} F{travel_f}
   G91
-  {% if is_abs_extrude %}
-    {% set e_total = e_total + e_move %}
-    G1 X{line_len} E{e_total} F{line_f}
-  {% else %}
-    G1 X{line_len} E{e_move} F{line_f}
-  {% endif %}
-
+  G1 X{line_len} E{e_move} F{line_f}
+  G90
   G92 E0
-  {% if was_abs_coord %} G90 {% else %} G91 {% endif %}
+
+  RESTORE_GCODE_STATE NAME=SMART_PURGE_STATE
 
 ```
 
