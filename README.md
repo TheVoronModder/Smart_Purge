@@ -69,13 +69,12 @@ variable_margin_300: 5.0
 variable_margin_350: 5.0
 
 gcode:
-  ##### --- Gather bed limits & size bucket ---
+  ##### --- Bed limits & size bucket ---
   {% set BED_MIN_X = printer.toolhead.axis_minimum.x|float %}
   {% set BED_MAX_X = printer.toolhead.axis_maximum.x|float %}
   {% set BED_MIN_Y = printer.toolhead.axis_minimum.y|float %}
   {% set BED_MAX_Y = printer.toolhead.axis_maximum.y|float %}
   {% set BED_X = BED_MAX_X - BED_MIN_X %}
-  {% set BED_Y = BED_MAX_Y - BED_MIN_Y %}
 
   {% if BED_X < 275 %}
     {% set default_margin = margin_250|float %}
@@ -130,39 +129,50 @@ gcode:
     {% if target_y > (BED_MAX_Y - margin) %}{% set target_y = BED_MAX_Y - margin %}{% endif %}
   {% endif %}
 
-  ##### --- Start X (front-left) & available width ---
+  ##### --- Start X & available room ---
   {% set start_x_abs = BED_MIN_X + margin %}
   {% set max_right = BED_MAX_X - margin %}
   {% set avail_w = max_right - start_x_abs %}
   {% if avail_w < 0 %}{% set avail_w = 0 %}{% endif %}
 
-  ##### --- Flow geometry & safe-capped E/mm (prevents max_extrude_cross_section trips) ---
+  ##### --- Flow geometry & safe-capped E/mm ---
   {% set lw = (params.LINE_W|default(line_w))|float %}
   {% set lh = (params.LAYER_H|default(layer_h))|float %}
   {% set fd = (params.FIL_D|default(fil_d))|float %}
-  {% set flow = (params.FLOW|default(flow))|float %}
+  {% set flowv = (params.FLOW|default(flow))|float %}
   {% set fil_area = 3.1415926535 * (fd/2.0) * (fd/2.0) %}
-  {% if fil_area <= 0 %}{% set fil_area = 2.405 %}{% endif %}  ; sane fallback for 1.75
-  {% set geom_xsec = lw * lh * flow %}
-  {% set max_xsec = (printer.configfile.settings.extruder.max_extrude_cross_section|float) if printer.configfile.settings.extruder is defined and printer.configfile.settings.extruder.max_extrude_cross_section is defined else 0.0 %}
+  {% if fil_area <= 0 %}{% set fil_area = 2.405 %}{% endif %}  ; fallback for 1.75
+  {% set geom_xsec = lw * lh * flowv %}
+
+  {% set cfg = printer.configfile.settings %}
+  {% if 'extruder' in cfg and 'max_extrude_cross_section' in cfg.extruder %}
+    {% set max_xsec = cfg.extruder.max_extrude_cross_section|float %}
+  {% else %}
+    {% set max_xsec = 0.0 %}
+  {% endif %}
+
   {% if max_xsec > 0 and geom_xsec > max_xsec %}
     {% set scale = max_xsec / geom_xsec %}
   {% else %}
     {% set scale = 1.0 %}
   {% endif %}
   {% set e_per_mm = (geom_xsec * scale) / fil_area %}
+
   {% if scale < 0.999 %}
-    RESPOND MSG="SMART_PURGE: scaling E by {{'%0.2f' % scale}} to respect max_extrude_cross_section={{'%0.3f' % max_xsec}} mm^2."
+    {% set scale_s = scale|round(2) %}
+    {% set max_s = max_xsec|round(3) %}
+    RESPOND PREFIX="SMART_PURGE" MSG="Scaling E by {{ scale_s }} to respect max_extrude_cross_section={{ max_s }} mm^2."
   {% endif %}
 
-  ##### --- Z approach (don’t crash if already higher) ---
+  ##### --- Z approach (don’t move down if already higher) ---
   {% set curz = printer.gcode_move.gcode_position.z|float %}
   {% set target_z = (params.LINE_Z|default(line_z))|float %}
   {% if target_z < 0.0 %}{% set target_z = 0.0 %}{% endif %}
   {% set z_go = target_z if curz < target_z else curz %}
 
-  ##### --- Prime anchor ---
+  ##### --- Prime anchor (force relative E locally) ---
   G90
+  M83
   G1 Z{z_go} F{travel_f}
   G1 X{start_x_abs} Y{target_y} F{travel_f}
   G92 E0
@@ -170,13 +180,11 @@ gcode:
 
   ##### --- Optional check mark (clamped to bed) ---
   {% if style != "DOT" %}
-    ; nominal check vectors
     {% set dx1n, dy1n = 3.0, 1.0 %}
     {% set dx2n, dy2n = 6.0, 4.0 %}
     {% set dx_sum = dx1n + dx2n %}
     {% set edge_room = max_right - start_x_abs %}
     {% set check_scale = 1.0 if edge_room >= (dx_sum + 0.5) else ( (edge_room - 0.5) / dx_sum if (edge_room - 0.5) > 0 else 0.0 ) %}
-    ; scaled (never beyond margin)
     {% set dx1, dy1 = dx1n*check_scale, dy1n*check_scale %}
     {% set dx2, dy2 = dx2n*check_scale, dy2n*check_scale %}
     {% set len1 = (dx1*dx1 + dy1*dy1) ** 0.5 %}
@@ -187,7 +195,7 @@ gcode:
     G91
     G1 X{dx1} Y{dy1} E{e1} F{line_f}
     G1 X{dx2} Y{dy2} E{e2} F{line_f}
-    ; drop back down vertically to baseline (travel)
+    ; drop vertically back to baseline (travel)
     G1 Y{- (dy1 + dy2)} F{travel_f}
     G90
   {% endif %}
@@ -210,6 +218,7 @@ gcode:
   G92 E0
 
   RESTORE_GCODE_STATE NAME=SMART_PURGE_STATE
+
 
 ```
 
