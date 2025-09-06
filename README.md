@@ -161,7 +161,7 @@ gcode:
   {% if scale < 0.999 %}
     {% set scale_s = scale|round(2) %}
     {% set max_s = max_xsec|round(3) %}
-    RESPOND PREFIX="SMART_PURGE" MSG="Scaling E by {{ scale_s }} to respect max_extrude_cross_section={{ max_s }} mm^2."
+    {action_respond_info("SMART_PURGE: Scaling E by " ~ (scale_s|string) ~ " to respect max_extrude_cross_section=" ~ (max_s|string) ~ " mm^2.")}
   {% endif %}
 
   ##### --- Z approach (don’t move down if already higher) ---
@@ -179,14 +179,17 @@ gcode:
   G1 E{prime_e} F{prime_f}
 
   ##### --- Optional check mark (clamped to bed) ---
+  {% set dx1 = 0.0 %}{% set dx2 = 0.0 %}
   {% if style != "DOT" %}
-    {% set dx1n, dy1n = 3.0, 1.0 %}
-    {% set dx2n, dy2n = 6.0, 4.0 %}
+    {% set dx1n = 3.0 %}{% set dy1n = 1.0 %}
+    {% set dx2n = 6.0 %}{% set dy2n = 4.0 %}
     {% set dx_sum = dx1n + dx2n %}
     {% set edge_room = max_right - start_x_abs %}
-    {% set check_scale = 1.0 if edge_room >= (dx_sum + 0.5) else ( (edge_room - 0.5) / dx_sum if (edge_room - 0.5) > 0 else 0.0 ) %}
-    {% set dx1, dy1 = dx1n*check_scale, dy1n*check_scale %}
-    {% set dx2, dy2 = dx2n*check_scale, dy2n*check_scale %}
+    {% set room_ok = edge_room - 0.5 %}
+    {% if room_ok < 0 %}{% set room_ok = 0.0 %}{% endif %}
+    {% set check_scale = 1.0 if edge_room >= (dx_sum + 0.5) else (room_ok / dx_sum if dx_sum > 0 else 0.0) %}
+    {% set dx1 = dx1n*check_scale %}{% set dy1 = dy1n*check_scale %}
+    {% set dx2 = dx2n*check_scale %}{% set dy2 = dy2n*check_scale %}
     {% set len1 = (dx1*dx1 + dy1*dy1) ** 0.5 %}
     {% set len2 = (dx2*dx2 + dy2*dy2) ** 0.5 %}
     {% set e1 = e_per_mm * len1 %}
@@ -195,13 +198,13 @@ gcode:
     G91
     G1 X{dx1} Y{dy1} E{e1} F{line_f}
     G1 X{dx2} Y{dy2} E{e2} F{line_f}
-    ; drop vertically back to baseline (travel)
+    ; return vertically to baseline (travel)
     G1 Y{- (dy1 + dy2)} F{travel_f}
     G90
   {% endif %}
 
   ##### --- Purge line (auto-clamped length) ---
-  {% set dx_check = (dx1 + dx2) if style != "DOT" else 0.0 %}
+  {% set dx_check = dx1 + dx2 %}
   {% set line_start_x = start_x_abs + dx_check + 10.0 %}
   {% if line_start_x > max_right %}{% set line_start_x = max_right %}{% endif %}
   {% if line_start_x < (BED_MIN_X + margin) %}{% set line_start_x = BED_MIN_X + margin %}{% endif %}
