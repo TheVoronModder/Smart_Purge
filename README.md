@@ -77,27 +77,23 @@ gcode:
   {% set BED_X = BED_MAX_X - BED_MIN_X %}
   {% set BED_Y = BED_MAX_Y - BED_MIN_Y %}
 
-  # --- Pick size bucket ---
-  {% set cand = [250.0, 300.0, 350.0] %}
-  {% set size = cand|min(attribute=None, key=lambda v: (BED_X - v)|abs) %}
-
-  # --- Margin selection ---
-  {% if params.MARGIN is defined %}
-    {% set margin = params.MARGIN|float %}
+  # --- Pick size bucket & margin (avoid lambda/key) ---
+  {% if BED_X < 275 %}
+    {% set size = 250.0 %}
+    {% set default_margin = margin_250|float %}
+  {% elif BED_X < 325 %}
+    {% set size = 300.0 %}
+    {% set default_margin = margin_300|float %}
   {% else %}
-    {% if size == 250.0 %}
-      {% set margin = margin_250|float %}
-    {% elif size == 300.0 %}
-      {% set margin = margin_300|float %}
-    {% else %}
-      {% set margin = margin_350|float %}
-    {% endif %}
+    {% set size = 350.0 %}
+    {% set default_margin = margin_350|float %}
   {% endif %}
+  {% set margin = (params.MARGIN|float) if params.MARGIN is defined else default_margin %}
 
   {% set req_len = (line_length|float) %}
   {% if req_len > 100.0 %}{% set req_len = 100.0 %}{% endif %}
   {% set desired_gap = params.FRONT_GAP|default(front_gap)|float %}
-  {% set style = params.STYLE|default("CHECK")|string|upper %}
+  {% set style = params.STYLE|default("CHECK")|upper %}
 
   # Home if needed
   {% set homed = printer.toolhead.homed_axes %}
@@ -169,12 +165,12 @@ gcode:
   {% if style == "DOT" %}
     ; just leave a blob (already primed)
     G4 P500
-    {% set dx_check = 0 %}
-    {% set dy_check = 0 %}
+    {% set dx_check = 0.0 %}
+    {% set dy_check = 0.0 %}
   {% else %}
     ; draw check mark
-    {% set dx1, dy1 = 3.0, 1.0 %}
-    {% set dx2, dy2 = 6.0, 4.0 %}
+    {% set dx1 = 3.0 %}{% set dy1 = 1.0 %}
+    {% set dx2 = 6.0 %}{% set dy2 = 4.0 %}
     {% set len1 = (dx1*dx1 + dy1*dy1) ** 0.5 %}
     {% set len2 = (dx2*dx2 + dy2*dy2) ** 0.5 %}
     {% set e1 = e_per_mm * len1 %}
@@ -191,7 +187,7 @@ gcode:
     {% endif %}
     G1 Y{- (dy1 + dy2)} F{travel_f}
     {% set dx_check = dx1 + dx2 %}
-    {% set dy_check = 0 %}
+    {% set dy_check = 0.0 %}
   {% endif %}
 
   # --- Purge line start ---
@@ -218,6 +214,7 @@ gcode:
 
   G92 E0
   {% if was_abs_coord %} G90 {% else %} G91 {% endif %}
+
 ```
 
 >[!NOTE]
