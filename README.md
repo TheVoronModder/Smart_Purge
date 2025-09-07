@@ -53,7 +53,7 @@ Simple Smart Purge for 3d printer ecosystems running Klipper
 # description: Front-left purge; STYLE=CHECK|DOT; object-aware front gap; bed-size margins; ≤100 mm line at first-layer Z
 # --- Tunables ---
 variable_front_gap: 30.0
-variable_line_z: 0.25           # print-level Z for purge (match your first layer)
+variable_line_z: 0.25           # print-level Z (match first layer)
 variable_z_lift: 2.0            # safe lift above LINE_Z before XY travel
 variable_line_length: 100.0
 variable_line_gap: 3.0          # gap after check before purge line
@@ -132,7 +132,7 @@ gcode:
     {% if target_y > (BED_MAX_Y - margin) %}{% set target_y = BED_MAX_Y - margin %}{% endif %}
   {% endif %}
 
-  ##### --- Start X & room ---
+  ##### --- Start X & right boundary ---
   {% set start_x_abs = BED_MIN_X + margin %}
   {% set max_right = BED_MAX_X - margin %}
   {% set avail_w = max_right - start_x_abs %}
@@ -146,8 +146,7 @@ gcode:
   {% set fil_area = 3.1415926535 * (fd/2.0) * (fd/2.0) %}
   {% if fil_area <= 0 %}{% set fil_area = 2.405 %}{% endif %}
   {% set geom_xsec = lw * lh * flowv %}
-  {% if printer.configfile.settings.extruder is defined
-        and printer.configfile.settings.extruder.max_extrude_cross_section is defined %}
+  {% if printer.configfile.settings.extruder is defined and printer.configfile.settings.extruder.max_extrude_cross_section is defined %}
     {% set max_xsec = printer.configfile.settings.extruder.max_extrude_cross_section|float %}
   {% else %}
     {% set max_xsec = 0.0 %}
@@ -159,8 +158,8 @@ gcode:
   {% endif %}
   {% set e_per_mm = (geom_xsec * scale) / fil_area %}
   {% if scale < 0.999 %}
-    {% set scs = ("%.2f"|format(scale)) %}
-    {% set mxs = ("%.3f"|format(max_xsec)) %}
+    {% set scs = ("%0.2f"|format(scale)) %}
+    {% set mxs = ("%0.3f"|format(max_xsec)) %}
     {action_respond_info("SMART_PURGE: Scaling E by " ~ scs ~ " to respect max_extrude_cross_section=" ~ mxs ~ " mm^2.")}
   {% endif %}
 
@@ -180,26 +179,30 @@ gcode:
   G92 E0
   G1 E{prime_e} F{prime_f}
 
-  ##### --- Optional check mark (clamped) ---
-  {% set dx1 = 0.0 %}{% set dx2 = 0.0 %}
+  ##### --- Optional check mark (clamped to bed) ---
+  {% set dx1 = 0.0 %}
+  {% set dx2 = 0.0 %}
   {% if style != "DOT" %}
-    {% set dx1n = 3.0 %}{% set dy1n = 1.0 %}
-    {% set dx2n = 6.0 %}{% set dy2n = 4.0 %}
+    {% set dx1n = 3.0 %}
+    {% set dy1n = 1.0 %}
+    {% set dx2n = 6.0 %}
+    {% set dy2n = 4.0 %}
     {% set dx_sum = dx1n + dx2n %}
     {% set edge_room = max_right - start_x_abs %}
-    {% set room_ok = edge_room - 0.5 %}
-    {% if room_ok < 0 %}{% set room_ok = 0.0 %}{% endif %}
-    {% if dx_sum > 0 %}
+    {% set check_scale = 0.0 %}
+    {% if dx_sum > 0.0 %}
       {% if edge_room >= (dx_sum + 0.5) %}
         {% set check_scale = 1.0 %}
       {% else %}
+        {% set room_ok = edge_room - 0.5 %}
+        {% if room_ok < 0.0 %}{% set room_ok = 0.0 %}{% endif %}
         {% set check_scale = room_ok / dx_sum %}
       {% endif %}
-    {% else %}
-      {% set check_scale = 0.0 %}
     {% endif %}
-    {% set dx1 = dx1n*check_scale %}{% set dy1 = dy1n*check_scale %}
-    {% set dx2 = dx2n*check_scale %}{% set dy2 = dy2n*check_scale %}
+    {% set dx1 = dx1n * check_scale %}
+    {% set dy1 = dy1n * check_scale %}
+    {% set dx2 = dx2n * check_scale %}
+    {% set dy2 = dy2n * check_scale %}
     {% set len1 = (dx1*dx1 + dy1*dy1) ** 0.5 %}
     {% set len2 = (dx2*dx2 + dy2*dy2) ** 0.5 %}
     {% set e1 = e_per_mm * len1 %}
@@ -225,7 +228,8 @@ gcode:
     {% set line_start_x = min_start %}
     {% set line_len = req_len %}
   {% else %}
-    {% set line_start_x = min_start if min_start <= max_right else max_right %}
+    {% set line_start_x = min_start %}
+    {% if line_start_x > max_right %}{% set line_start_x = max_right %}{% endif %}
     {% set room = max_right - line_start_x %}
     {% if room < 0.1 %}{% set room = 0.1 %}{% endif %}
     {% set line_len = room if room < req_len else req_len %}
@@ -241,6 +245,7 @@ gcode:
   G92 E0
 
   RESTORE_GCODE_STATE NAME=SMART_PURGE_STATE
+
 
 ```
 
