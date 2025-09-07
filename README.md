@@ -193,9 +193,54 @@ gcode:
       {% if edge_room >= (dx_sum + 0.5) %}
         {% set check_scale = 1.0 %}
       {% else %}
-        {% set check_scale_
+        {% set check_scale = room_ok / dx_sum %}
+      {% endif %}
+    {% else %}
+      {% set check_scale = 0.0 %}
+    {% endif %}
+    {% set dx1 = dx1n*check_scale %}{% set dy1 = dy1n*check_scale %}
+    {% set dx2 = dx2n*check_scale %}{% set dy2 = dy2n*check_scale %}
+    {% set len1 = (dx1*dx1 + dy1*dy1) ** 0.5 %}
+    {% set len2 = (dx2*dx2 + dy2*dy2) ** 0.5 %}
+    {% set e1 = e_per_mm * len1 %}
+    {% set e2 = e_per_mm * len2 %}
+    {% set y_back = 0.0 - (dy1 + dy2) %}
 
+    G91
+    G1 X{dx1} Y{dy1} E{e1} F{line_f}
+    G1 X{dx2} Y{dy2} E{e2} F{line_f}
+    G1 Y{y_back} F{travel_f}
+    G90
+  {% endif %}
 
+  ##### --- Purge line: prefer full requested length ---
+  {% set check_end_x = start_x_abs + dx1 + dx2 %}
+  {% set min_start = check_end_x + gap_after_check %}
+  {% set min_bound = BED_MIN_X + margin %}
+  {% if min_start < min_bound %}{% set min_start = min_bound %}{% endif %}
+  {% set max_start_for_full = max_right - req_len %}
+  {% if max_start_for_full < min_bound %}{% set max_start_for_full = min_bound %}{% endif %}
+
+  {% if min_start <= max_start_for_full %}
+    {% set line_start_x = min_start %}
+    {% set line_len = req_len %}
+  {% else %}
+    {% set line_start_x = min_start if min_start <= max_right else max_right %}
+    {% set room = max_right - line_start_x %}
+    {% if room < 0.1 %}{% set room = 0.1 %}{% endif %}
+    {% set line_len = room if room < req_len else req_len %}
+  {% endif %}
+
+  {% set e_move = e_per_mm * line_len %}
+
+  G90
+  G1 X{line_start_x} Y{target_y} F{travel_f}
+  G91
+  G1 X{line_len} E{e_move} F{line_f}
+  G90
+  G92 E0
+
+  RESTORE_GCODE_STATE NAME=SMART_PURGE_STATE
 
 ```
 
